@@ -4,8 +4,11 @@
  *
  *   import { CheckScanBridge } from './checkscan-bridge.js';
  *   const bridge = new CheckScanBridge();
- *   const result = await bridge.scan({ format: 'Jpeg', color: 'Gray', dpi: 200 });
- *   const blob = CheckScanBridge.toBlob(result.images[0]);
+ *   const result = await bridge.scan({ batch: false });
+ *   for (const item of result.items) {
+ *     const front = CheckScanBridge.toBlob(item.front);   // X9 TIFF G4 (上傳用)
+ *     img.src = CheckScanBridge.previewUrl(item.front);   // PNG 預覽 (顯示用)
+ *   }
  */
 export class CheckScanBridgeError extends Error {
   constructor(code, message, status) {
@@ -30,17 +33,26 @@ export class CheckScanBridge {
     return this.#request('GET', '/api/health');
   }
 
-  /** 掃描機狀態：{ device, available, busy, message } */
+  /** 掃描機狀態：{ device, available, busy, message, capabilities, unmetRequirements } */
   device() {
     return this.#request('GET', '/api/device');
   }
 
   /**
-   * 啟動掃描：resolve 時代表使用者已放入支票且掃描完成。
-   * @param {{ timeoutMs?: number, format?: 'Jpeg'|'Tiff'|'Bmp', color?: 'Mono'|'Gray'|'Color', dpi?: number }} [options]
+   * 啟動掃描：resolve 時代表支票已放入並掃描完成。
+   * 連續掃描中途出錯時仍會 resolve，已掃描的支票在 items，錯誤在 result.error。
+   * @param {{ timeoutMs?: number, batch?: boolean, maxItems?: number, preview?: boolean }} [options]
    * @param {{ signal?: AbortSignal }} [init]
    * @returns {Promise<{ scanId: string, scannedAt: string, device: string,
-   *   images: { side: string, contentType: string, bytes: number, base64: string }[], micr: string|null }>}
+   *   items: CheckItem[], error: { code: string, message: string } | null }>}
+   *
+   * @typedef {{ side: string, contentType: string, format: string, width: number, height: number,
+   *   dpi: number, bytes: number, base64: string, previewPngBase64: string|null }} CheckImage
+   * @typedef {{ raw: string, routingNumber: string|null, routingValid: boolean, auxiliaryOnUs: string|null,
+   *   epc: string|null, onUs: string|null, accountNumber: string|null, serialNumber: string|null,
+   *   amountCents: number|null, hasUnreadable: boolean }} MicrData
+   * @typedef {{ sequence: number, itemId: string, front: CheckImage, back: CheckImage,
+   *   micr: MicrData|null, warnings: string[] }} CheckItem
    */
   scan(options = {}, { signal } = {}) {
     return this.#request('POST', '/api/scan', options, signal);
@@ -59,9 +71,9 @@ export class CheckScanBridge {
     return new Blob([bytes], { type: image.contentType });
   }
 
-  /** 將影像轉成 data URL，可直接設定到 <img src>。(TIFF 多數瀏覽器無法顯示) */
-  static toDataUrl(image) {
-    return `data:${image.contentType};base64,${image.base64}`;
+  /** PNG 預覽圖的 data URL，可直接設定到 <img src> (TIFF 在多數瀏覽器無法顯示)。 */
+  static previewUrl(image) {
+    return image.previewPngBase64 ? `data:image/png;base64,${image.previewPngBase64}` : null;
   }
 
   async #request(method, path, body, signal) {

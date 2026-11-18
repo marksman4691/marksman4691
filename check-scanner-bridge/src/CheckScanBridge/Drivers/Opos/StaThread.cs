@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
-namespace CheckScanBridge.Scanning;
+namespace CheckScanBridge.Drivers.Opos;
 
 /// <summary>
 /// OPOS Control Object 是 ActiveX (STA) 元件，所有呼叫都必須在同一條

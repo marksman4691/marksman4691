@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>支票掃描上傳範例</title>
+</head>
+<body>
+  <!-- 範例：網頁整合 bridge，掃描後把 X9 影像與 MICR 上傳到自己的後端，
+       後端再組成 X9.37/X9.100-187 檔案經 JPM Host-to-Host 傳送 -->
+  <label><input id="batch" type="checkbox"> 連續掃描</label>
+  <button id="scan">掃描並上傳支票</button>
+  <button id="cancel" disabled>取消</button>
+  <p id="msg"></p>
+  <div id="preview"></div>
+
+  <script type="module">
+    import { CheckScanBridge } from './checkscan-bridge.js';
+
+    const bridge = new CheckScanBridge(/* { apiKey: '...' } */);
+    const UPLOAD_URL = '/api/checks/upload'; // ← 換成你的後端 API
+    const msg = (t) => (document.getElementById('msg').textContent = t);
+
+    document.getElementById('scan').onclick = async () => {
+      try {
+        const health = await bridge.health();
+        if (health.unmetRequirements?.length) {
+          msg(`掃描機驅動不支援：${health.unmetRequirements.join(', ')}`);
+          return;
+        }
+      } catch {
+        msg('找不到掃描機程式，請先安裝並啟動 CheckScanBridge (Chrome 若詢問「存取區域網路裝置」請按允許)');
+        return;
+      }
+
+      document.getElementById('cancel').disabled = false;
+      msg('請將支票放入掃描機…');
+      try {
+        const result = await bridge.scan({ batch: document.getElementById('batch').checked, timeoutMs: 60000 });
+        if (result.error) alert(`掃描中斷：${result.error.message}（已掃描 ${result.items.length} 張會照常上傳）`);
+
+        const form = new FormData();
+        form.append('scanId', result.scanId);
+        for (const item of result.items) {
+          const p = `items[${item.sequence}]`;
+          form.append(`${p}.front`, CheckScanBridge.toBlob(item.front), `${item.itemId}_front.tif`);
+          form.append(`${p}.back`, CheckScanBridge.toBlob(item.back), `${item.itemId}_back.tif`);
+          form.append(`${p}.micr`, JSON.stringify(item.micr));        // routing / onUs / aux / epc / amount
+          form.append(`${p}.warnings`, JSON.stringify(item.warnings));  // 有警告時可要求人工確認或重掃
+
+          const img = new Image();
+          img.src = CheckScanBridge.previewUrl(item.front);
+          img.style.maxWidth = '400px';
+          document.getElementById('preview').append(img);
+        }
+
+        msg('上傳中…');
+        const res = await fetch(UPLOAD_URL, { method: 'POST', body: form, credentials: 'include' });
+        if (!res.ok) throw new Error(`上傳失敗 HTTP ${res.status}`);
+        msg(`上傳完成，共 ${result.items.length} 張`);
+      } catch (e) {
+        msg(`${e.code ?? 'ERROR'}: ${e.message}`);
+      } finally {
+        document.getElementById('cancel').disabled = true;
+      }
+    };
+
+    document.getElementById('cancel').onclick = () => bridge.cancel();
+  </script>
+</body>
+</html>

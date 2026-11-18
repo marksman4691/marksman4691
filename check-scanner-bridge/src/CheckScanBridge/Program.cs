@@ -1,7 +1,8 @@
 using System.Reflection;
 using System.Text.Json.Serialization;
 using CheckScanBridge;
-using CheckScanBridge.Scanning;
+using CheckScanBridge.Capture;
+using CheckScanBridge.Drivers;
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
@@ -28,31 +29,14 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
     .WithMethods("GET", "POST")
     .WithHeaders("Content-Type", "X-Bridge-Key")));
 
-if (string.Equals(options.Device, "Opos", StringComparison.OrdinalIgnoreCase))
-{
-    builder.Services.AddSingleton<IScannerDevice>(sp => OperatingSystem.IsWindows()
-        ? new OposCheckScannerDevice(options.Opos, sp.GetRequiredService<ILogger<OposCheckScannerDevice>>())
-        : throw new PlatformNotSupportedException("Device=Opos 只能在 Windows 上執行"));
-}
-else
-{
-    builder.Services.AddSingleton<IScannerDevice>(new MockScannerDevice(options.Mock));
-}
-builder.Services.AddSingleton<ScannerService>();
+builder.Services.AddSingleton<IScannerDriver>(sp => DriverFactory.Create(options, sp));
+builder.Services.AddSingleton<ItemProcessor>();
+builder.Services.AddSingleton<CaptureService>();
 
 var app = builder.Build();
 
-// Chrome Private Network Access：公開 HTTPS 網站呼叫 127.0.0.1 時，preflight 需回應此 header
-app.Use((ctx, next) =>
-{
-    if (HttpMethods.IsOptions(ctx.Request.Method) &&
-        ctx.Request.Headers.ContainsKey("Access-Control-Request-Private-Network"))
-    {
-        ctx.Response.Headers["Access-Control-Allow-Private-Network"] = "true";
-    }
-    return next();
-});
-
+// 注意：Chrome 142+ 的 Local Network Access (LNA) 會在公開網站第一次呼叫 127.0.0.1 時
+// 跳出權限提示，須由使用者允許或以企業政策 LocalNetworkAccessAllowedForUrls 預先允許 (見 README)。
 app.UseCors();
 
 // CORS 只限制「讀取回應」，無法阻止請求送達；因此伺服器端再擋一次 Origin 與 API Key
@@ -97,20 +81,20 @@ app.UseStaticFiles();
 
 var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
-app.MapGet("/api/health", (ScannerService s) =>
-    Results.Ok(new { status = "ok", version, device = s.DeviceName }));
+app.MapGet("/api/health", (CaptureService s) =>
+    Results.Ok(new { status = "ok", version, device = s.DeviceName, unmetRequirements = s.UnmetRequirements() }));
 
-app.MapGet("/api/device", async (ScannerService s, CancellationToken ct) =>
+app.MapGet("/api/device", async (CaptureService s, CancellationToken ct) =>
     Results.Ok(await s.GetStatusAsync(ct)));
 
-app.MapPost("/api/scan", async (ScanRequest? request, ScannerService s, HttpContext ctx) =>
+app.MapPost("/api/scan", async (ScanRequest? request, CaptureService s, HttpContext ctx) =>
     Results.Ok(await s.ScanAsync(request ?? new ScanRequest(), ctx.RequestAborted)));
 
-app.MapPost("/api/scan/cancel", (ScannerService s) =>
+app.MapPost("/api/scan/cancel", (CaptureService s) =>
     Results.Ok(new { cancelled = s.CancelCurrent() }));
 
 app.Logger.LogInformation("CheckScanBridge {Version} listening on {Url}, device={Device}",
-    version, options.Url, app.Services.GetRequiredService<ScannerService>().DeviceName);
+    version, options.Url, app.Services.GetRequiredService<CaptureService>().DeviceName);
 
 app.Run();
 
@@ -119,3 +103,6 @@ static Task Error(HttpContext ctx, int status, string code, string message)
     ctx.Response.StatusCode = status;
     return ctx.Response.WriteAsJsonAsync(new { error = new { code, message } });
 }
+
+/// <summary>供整合測試 (WebApplicationFactory) 使用。</summary>
+public partial class Program;
