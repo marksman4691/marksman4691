@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>CheckScanBridge</AssemblyName>
+    <RootNamespace>CheckScanBridge</RootNamespace>
+    <Version>0.1.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ContentRoot 為執行檔目錄，因此 wwwroot 也要複製到輸出目錄 -->
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 共用瀏覽器 SDK，同時提供給內建測試頁 -->
+    <Content Include="..\..\client\checkscan-bridge.js" Link="wwwroot\checkscan-bridge.js" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

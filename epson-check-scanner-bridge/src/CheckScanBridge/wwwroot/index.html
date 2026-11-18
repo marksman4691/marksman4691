@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CheckScanBridge 測試頁</title>
+  <style>
+    body { font-family: system-ui, "Microsoft JhengHei", sans-serif; margin: 24px; color: #222; }
+    button { font-size: 16px; padding: 8px 16px; margin-right: 8px; }
+    #log { background: #f4f4f4; padding: 12px; white-space: pre-wrap; font-family: monospace; max-height: 200px; overflow: auto; }
+    .images img { max-width: 100%; border: 1px solid #ccc; margin: 8px 0; display: block; }
+    label { margin-right: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Epson 票據掃描 Bridge 測試頁</h1>
+  <p>
+    <label>格式 <select id="format"><option>Jpeg</option><option>Bmp</option><option>Tiff</option></select></label>
+    <label>色彩 <select id="color"><option>Gray</option><option>Mono</option><option>Color</option></select></label>
+    <label>DPI <input id="dpi" type="number" value="200" style="width:5em"></label>
+  </p>
+  <p>
+    <button id="status">檢查狀態</button>
+    <button id="scan">掃描支票</button>
+    <button id="cancel">取消</button>
+  </p>
+  <div id="log"></div>
+  <div class="images" id="images"></div>
+
+  <script type="module">
+    import { CheckScanBridge } from './checkscan-bridge.js';
+    const bridge = new CheckScanBridge({ baseUrl: location.origin });
+    const $ = (id) => document.getElementById(id);
+    const log = (m) => { $('log').textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`; };
+
+    $('status').onclick = async () => {
+      try { log(JSON.stringify(await bridge.device())); } catch (e) { log(`錯誤 ${e.code}: ${e.message}`); }
+    };
+    $('cancel').onclick = async () => log(JSON.stringify(await bridge.cancel()));
+    $('scan').onclick = async () => {
+      $('images').innerHTML = '';
+      log('請放入支票…');
+      try {
+        const r = await bridge.scan({ format: $('format').value, color: $('color').value, dpi: +$('dpi').value });
+        log(`完成 scanId=${r.scanId} micr=${r.micr ?? '(無)'}`);
+        for (const img of r.images) {
+          const el = document.createElement('img');
+          el.src = CheckScanBridge.toDataUrl(img);
+          el.title = `${img.side} ${img.contentType} ${img.bytes} bytes`;
+          $('images').append(el);
+        }
+      } catch (e) {
+        log(`錯誤 ${e.code}: ${e.message}`);
+      }
+    };
+  </script>
+</body>
+</html>
