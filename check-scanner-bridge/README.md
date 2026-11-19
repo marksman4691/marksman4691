@@ -17,7 +17,7 @@
  │      ▼  IScannerDriver (每個廠牌一個)          ItemProcessor (與機型無關)       │
  │  ┌──────────────┐  RawItem: 正/背面原始影像   ┌─────────────────────────────┐ │
  │  │ Mock         │  + MICR (標準字元 T/U/A/D) ─▶│ 解碼 TIFF / 灰階              │ │
- │  │ Epson TM-S   │                             │ → 重新取樣到 200 dpi          │ │
+ │  │ EpsonWebApi ─┼─ LAN HTTP(S) ─▶ TM-S1000II-NW │ → 重新取樣到 200 dpi          │ │
  │  │ Panini       │                             │ → 黑白化 (原生黑白直接使用)    │ │
  │  │ Digital Check│                             │ → X9 TIFF G4 + 格式自我驗證   │ │
  │  │ OPOS (通用)  │                             │ → MICR 解析 + routing 檢查碼  │ │
@@ -43,10 +43,10 @@
 
 | Driver | 正面 | 背面 | MICR | 連續 | 說明 |
 |---|---|---|---|---|---|
+| `EpsonWebApi` | ✅ | ✅ | ✅ | ✅ | **Epson 網路機種 (TM-S1000II-NW)**，透過掃描機內建 Scan Web API，免安裝驅動。依 Epson Web API Reference Guide Rev.A 實作，**待實機驗證** |
 | `Mock` | ✅ | ✅ | ✅ | ✅ | 模擬裝置，網頁端開發與測試用 |
 | `Opos` | ✅ | ❌ | ❌ | ❌ | UPOS 標準未定義背面影像，**不符合需求**，僅保留作參考 |
-| Epson TM-S (原生 SDK) | | | | | 待提供機型與 Epson SDK 文件後實作 |
-| Panini / Digital Check | | | | | 視需要，依各廠 SDK 實作 |
+| Epson USB / Panini / Digital Check | | | | | 視需要，依各廠 SDK 實作 |
 
 新增驅動的方式見 [docs/adding-a-driver.md](docs/adding-a-driver.md)。
 
@@ -56,6 +56,46 @@
 - TWAIN 是通用影像傳輸協定，**沒有標準化**支票專用功能 (MICR、每張支票的正反面配對、進紙/退紙控制、背書列印)；
   各廠商以自訂 capability 實作，行為不一致，有些機型透過 TWAIN 讀不到 MICR。
 - RDC / 銀行端軟體 (例如 JPM Remote Capture 使用的掃描元件) 也是透過支票掃描機專用 API，而非 TWAIN。
+
+## Epson TM-S1000II-NW (EpsonWebApi 驅動)
+
+掃描機內建 Scan Web API，bridge 透過區域網路呼叫，**電腦不需安裝 Epson 驅動**。
+掃描機直接輸出 200 dpi 黑白 CCITT G4 TIFF (Epson 標示符合 ANSI X9.100-181)，並在機器上完成 MICR 讀取與 IQA。
+
+流程：`Connect` (取得 token、獨占掃描機) → `ScanSetting(Check)` (正反面、TIFF 黑白、MICR E13B、IQA)
+→ `ScanStart(Check)` → 輪詢 `GetDocumentList` → `GetImage` 正/背面 → `Disconnect` (掃描機刪除所有影像)。
+
+### 掃描機設定
+
+1. 用 TM-S1000II Utility / Web Config 設定網路，**建議設為固定 IP** (或 DHCP 保留)。
+   Web Config 預設密碼是機器序號，請改掉。
+2. 瀏覽器開 `http://<掃描機IP>/demo` 可用 Epson 內建的掃描示範確認機器正常。
+3. 設定 `appsettings.json`：
+
+```jsonc
+"Bridge": {
+  "Driver": "EpsonWebApi",
+  "EpsonWebApi": {
+    "BaseUrl": "http://192.168.1.50",       // 掃描機 IP；建議改用 HTTPS (見下)
+    "ExclusiveTimeoutSeconds": 60,
+    "IqaEnabled": true,                      // 掃描機 IQA 未通過的項目成為 IQA_* 警告
+    "StopOnMicrError": false,
+    "ElectronicEndorsement": ""              // 選用：電子背書文字 (印在背面影像)
+  }
+}
+```
+
+### 注意事項
+
+- **獨占使用**：同一時間只有一台電腦能連線 (`Connect`)；其他電腦會收到 `BUSY`。bridge 每次掃描結束 (含取消、
+  錯誤、瀏覽器中斷) 都會立即 `Disconnect` 釋放掃描機；異常中斷時掃描機會在 `ExclusiveTimeoutSeconds` 後自動釋放。
+- **傳輸安全**：HTTP 會在區網以明文傳送支票影像。正式環境建議在 Web Config 註冊伺服器憑證啟用 HTTPS
+  (憑證 Common Name 須等於掃描機主機名稱)，`BaseUrl` 用 `https://主機名稱`，並把簽發 CA 安裝到電腦的「受信任的根憑證」。
+- **MICR 符號**：Epson MICR 文字以 `t` (Transit)、`o` (On-Us) 表示特殊符號 (手冊範例)；Amount / Dash 預設對應 `a` / `-`，
+  手冊未明載，以 `MicrSymbolMap` 設定。驅動會用 Epson 自己解析的 routing 交叉檢查，不一致時產生 `MICR_PARSE_MISMATCH` 警告。
+- **Authorization header**：手冊寫「放入 Connect 取得的 token」，實作為直接放 token；若實機要求 `Bearer`，設定 `AuthorizationScheme`。
+- 掃描機也支援瀏覽器直接呼叫 (Epson 範例程式即是)，但公司 HTTPS 網站呼叫區網掃描機需每台掃描機的 HTTPS 憑證、
+  Chrome 區域網路權限，且 MICR/格式處理要搬到網頁端；因此仍建議透過 bridge。
 
 ## 影像格式與 JPM Host-to-Host
 
@@ -82,6 +122,7 @@ src/CheckScanBridge/
   Imaging/                       X9TiffCodec (TIFF G4 編解碼/驗證)、重新取樣、黑白化、PNG 預覽
   Drivers/IScannerDriver.cs      驅動介面
   Drivers/DriverFactory.cs       依設定建立驅動 (新增機型在此註冊)
+  Drivers/EpsonWebApi/           Epson 網路機種 (Scan Web API) 驅動
   Drivers/Mock/                  模擬驅動
   Drivers/Opos/                  OPOS 通用驅動 + STA 執行緒 (COM 元件用)
   wwwroot/index.html             內建測試頁 http://127.0.0.1:9123/
@@ -109,7 +150,7 @@ dotnet run --project src/CheckScanBridge      # Mock 模式，開啟 http://127.
 
 ```jsonc
 "Bridge": {
-  "Driver": "Mock",                                  // Mock | Opos | (之後：Epson、Panini…)
+  "Driver": "EpsonWebApi",                           // EpsonWebApi | Mock | Opos
   "AllowedOrigins": ["https://你的網站"],
   "Requirements": { "RequireBack": true, "RequireMicr": true },
   "Image": { "Dpi": 200, "ByteOrder": "LittleEndian" }
@@ -149,13 +190,14 @@ dotnet run --project src/CheckScanBridge      # Mock 模式，開啟 http://127.
 
 **警告 (warnings)**：`MICR_MISSING`、`MICR_UNREADABLE_CHARACTERS`、`MICR_ROUTING_MISSING`、`MICR_ROUTING_CHECKSUM_FAILED`、
 `FRONT/BACK_IMAGE_SIZE_OUT_OF_RANGE`、`FRONT/BACK_IMAGE_TOO_LIGHT`、`FRONT/BACK_IMAGE_TOO_DARK`、`FRONT_BACK_SIZE_MISMATCH`，
-以及驅動回報的警告 (例如重疊進紙)。建議網頁端有警告時要求人工確認或重掃。
+以及驅動回報的警告 (EpsonWebApi：`IQA_IMAGE_TOO_LIGHT`、`IQA_PIGGY_BACK` 等掃描機 IQA 未通過項目、`MICR_PARSE_MISMATCH`)。建議網頁端有警告時要求人工確認或重掃。
 
 **錯誤** `{ "error": { "code", "message" } }`：
 
 | code | HTTP | 說明 |
 |---|---|---|
 | `CAPABILITY_MISSING` | 501 | 目前驅動不支援必要功能 (例如背面影像) |
+| `PAPER_JAM` / `DOUBLE_FEED` / `MISINSERTION` / `PAPER_IN_PATH` / `COVER_OPEN` | 500 / 409 / 503 | 掃描機回報的紙張/機構問題 |
 | `BUSY` | 409 | 已有掃描進行中 / 裝置被占用 |
 | `CANCELLED` | 409 | 已取消 |
 | `TIMEOUT` | 408 | 等待放入支票逾時 |
@@ -192,6 +234,6 @@ for (const item of items) {
 
 ## 目前限制
 
-- 實機驅動 (Epson 原生 SDK 等) 尚待機型與 SDK 文件。
+- `EpsonWebApi` 驅動依手冊與模擬掃描機測試，尚未在實機驗證 (MICR 符號、Authorization 格式、輪詢時序需實測)。
 - 灰階來源的黑白化為通用演算法；實務上應優先使用掃描機原生黑白輸出 (各廠 SDK 通常提供 X9 用的 G4 輸出)。
 - 影像品質檢查只有尺寸與黑色比例的基本檢查，並非完整的 X9.100-180 IQA。

@@ -1,3 +1,4 @@
+using CheckScanBridge.Drivers.EpsonWebApi;
 using CheckScanBridge.Imaging;
 
 namespace CheckScanBridge;
@@ -16,7 +17,7 @@ public sealed class BridgeOptions
     /// <summary>選填：若設定，所有 /api 請求須帶 X-Bridge-Key header。</summary>
     public string? ApiKey { get; set; }
 
-    /// <summary>使用的掃描機驅動：Mock | Opos (之後新增 Epson、Panini、DigitalCheck…)。</summary>
+    /// <summary>使用的掃描機驅動：Mock | EpsonWebApi | Opos (之後可新增 Panini、DigitalCheck…)。</summary>
     public string Driver { get; set; } = "Mock";
 
     public int DefaultScanTimeoutMs { get; set; } = 30_000;
@@ -25,6 +26,7 @@ public sealed class BridgeOptions
 
     public RequirementOptions Requirements { get; set; } = new();
     public ImageProfileOptions Image { get; set; } = new();
+    public EpsonWebApiOptions EpsonWebApi { get; set; } = new();
     public OposOptions Opos { get; set; } = new();
     public MockOptions Mock { get; set; } = new();
 }
